@@ -20,7 +20,22 @@ Installation ohne Administratorrechte. Ergebnis: eine MP4-Datei, die direkt in P
    - **kopieren** und mit `Strg+V` im Explorer oder in Premiere einfügen,
    - abspielen, im Ordner zeigen oder löschen.
 
-Der rote Rahmen um den Bereich, der Countdown und die Stopp-Leiste sind **nie im Video zu sehen**.
+Der rote Rahmen, der Countdown und die Stopp-Leiste sind **nie im Video zu sehen**: Rahmen und Leiste
+liegen immer außerhalb des aufgenommenen Bereichs (darunter, darüber, daneben oder auf einem anderen
+Bildschirm). Bei Vollbild auf nur einem Bildschirm sitzt die Leiste nur dann im Bild, wenn Windows
+bestätigt, dass sie aus der Aufnahme ausgeblendet ist (Windows 10 2004 und neuer); sonst steuert man die
+Aufnahme über die Taskleiste (ClipCatch-Symbol anklicken = beenden, Pause/Stopp in der Vorschau) oder
+`Strg+Umschalt+R`.
+
+## Zuverlässigkeit
+
+- Startet die Aufnahme nicht oder kommen keine Bilder an, probiert ClipCatch automatisch den nächsten
+  Weg: Windows Graphics Capture und Desktop Duplication, jeweils mit Hardware- und mit Software-Encoder.
+- Aufgenommen wird zuerst in einen lokalen Ordner (`%LOCALAPPDATA%\ClipCatch\Temp`), den weder OneDrive
+  noch der Windows-Ordnerschutz (Ransomware-Schutz) blockieren. Danach wird die fertige Datei geprüft und
+  in den Speicherort verschoben. Nimmt der Ordner sie nicht an, bleibt sie in
+  `%LOCALAPPDATA%\ClipCatch\Aufnahmen` und ClipCatch zeigt sie an.
+- Ohne Mikrofon oder Lautsprecher wird einfach ohne diese Tonquelle aufgenommen.
 
 ## Einstellungen
 
@@ -82,7 +97,8 @@ veröffentlicht ein Release.
 | `RecordingService.cs` | die Aufnahme selbst (über [ScreenRecorderLib](https://github.com/sskodje/ScreenRecorderLib)) |
 | `Settings.cs` | gespeicherte Einstellungen |
 
-Protokolle bei Problemen: `%LOCALAPPDATA%\ClipCatch\recorder.log` und `clipcatch.log`.
+Protokolle bei Problemen: `%LOCALAPPDATA%\ClipCatch\clipcatch.log` (welcher Aufnahmeweg, welche Fehler)
+und `recorder.log` (Details der Aufnahme-Bibliothek).
 
 ## Lizenz
 

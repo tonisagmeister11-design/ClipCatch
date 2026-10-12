@@ -60,6 +60,7 @@ namespace ClipCatch
             _recordings.CollectionChanged += (s, e) => UpdateEmptyState();
 
             _service = new RecordingService(Dispatcher);
+            _service.Started += OnRecordingStarted;
             _service.Completed += OnRecordingCompleted;
             _service.Failed += OnRecordingFailed;
 
@@ -144,7 +145,7 @@ namespace ClipCatch
             }
             catch (Exception ex)
             {
-                App.Log(ex);
+                Log.Error("Fehler", ex);
                 MessageBox.Show(this, "Der Ordner konnte nicht gewählt werden:\n" + ex.Message, "ClipCatch", MessageBoxButton.OK, MessageBoxImage.Warning);
             }
         }
@@ -185,6 +186,7 @@ namespace ClipCatch
                 handled = true;
                 if (_state == State.Idle) StartFlow();
                 else if (_state == State.Recording) StopRecording();
+                else if (_state == State.Selecting || _state == State.Countdown) Log.Info("Kürzel während Auswahl/Countdown ignoriert");
             }
             return IntPtr.Zero;
         }
@@ -208,7 +210,7 @@ namespace ClipCatch
             }
             catch (Exception ex)
             {
-                App.Log(ex);
+                Log.Error("Fehler", ex);
                 selection = null;
             }
             if (selection == null)
@@ -223,10 +225,19 @@ namespace ClipCatch
             _frame = new RegionFrame(onScreen);
             _frame.Show();
 
+            // Where the stop bar goes is decided now, so the countdown can tell how to stop.
+            _bar = new RecordingBar(onScreen, selection.Monitor, _hotkeyRegistered ? HotkeyText : null);
+            _bar.StopRequested += StopRecording;
+            _bar.PauseRequested += TogglePause;
+            var mode = _bar.Prepare();
+            string stopHint = mode == RecordingBar.BarMode.Taskbar
+                ? (_hotkeyRegistered ? $"Beenden: {HotkeyText} oder ClipCatch in der Taskleiste anklicken" : "Beenden: ClipCatch in der Taskleiste anklicken")
+                : null;
+
             if (_settings.Countdown)
             {
                 _state = State.Countdown;
-                bool go = await new CountdownWindow(onScreen).RunAsync();
+                bool go = await new CountdownWindow(onScreen, stopHint).RunAsync();
                 if (!go)
                 {
                     CloseRecordingWindows();
@@ -235,7 +246,7 @@ namespace ClipCatch
                 }
             }
 
-            var path = NewFilePath();
+            _userCancelled = false;
             try
             {
                 _service.Start(new RecordingRequest
@@ -243,12 +254,12 @@ namespace ClipCatch
                     Monitor = selection.Monitor,
                     Region = selection.Region,
                     Settings = _settings,
-                    FilePath = path,
+                    FilePath = NewFilePath(),
                 });
             }
             catch (Exception ex)
             {
-                App.Log(ex);
+                Log.Error("Start", ex);
                 CloseRecordingWindows();
                 BackToIdle();
                 ShowError("Die Aufnahme konnte nicht gestartet werden.", ex.Message);
@@ -256,22 +267,27 @@ namespace ClipCatch
             }
 
             _state = State.Recording;
-            _bar = new RecordingBar(onScreen, selection.Monitor, _hotkeyRegistered ? HotkeyText : null);
-            _bar.StopRequested += StopRecording;
-            _bar.PauseRequested += () =>
-            {
-                if (_state != State.Recording) return;
-                _service.TogglePause();
-                _bar.SetPaused(_service.IsPaused);
-                _frame?.SetPaused(_service.IsPaused);
-            };
-            _bar.Show();
+            _bar.ShowForRecording();
             _tick.Start();
         }
+
+        private void OnRecordingStarted() => _bar?.SetStarted();
+
+        private void TogglePause()
+        {
+            if (_state != State.Recording || !_service.IsRecording) return;
+            _service.TogglePause();
+            _bar?.SetPaused(_service.IsPaused);
+            _frame?.SetPaused(_service.IsPaused);
+        }
+
+        private bool _userCancelled;
 
         private void StopRecording()
         {
             if (_state != State.Recording) return;
+            // Stopped before the first frame: that is a cancel, not an error.
+            _userCancelled = !_service.IsRecording;
             _state = State.Finishing;
             _bar?.SetFinishing();
             _service.Stop();
@@ -289,8 +305,17 @@ namespace ClipCatch
                 entry.IsNew = true;
                 RecordingsList.SelectedItem = entry;
                 RecordingsList.ScrollIntoView(entry);
+                ShowToast($"Aufnahme gespeichert ({Format.Duration(elapsed)}) – zum Schneiden einfach in Premiere ziehen");
             }
-            ShowToast($"Aufnahme gespeichert ({Format.Duration(elapsed)}) – zum Schneiden einfach in Premiere ziehen");
+            else
+            {
+                // The chosen folder refused the file (e.g. Windows' ransomware protection): it was kept elsewhere.
+                MessageBox.Show(this,
+                    $"Die Aufnahme wurde gespeichert, aber der gewählte Ordner hat sie nicht angenommen. Sie liegt hier:\n\n{path}\n\n" +
+                    "Tipp: Unter „Speicherort“ einen anderen Ordner wählen.",
+                    "ClipCatch", MessageBoxButton.OK, MessageBoxImage.Information);
+                Process.Start("explorer.exe", $"/select,\"{path}\"");
+            }
         }
 
         private void OnRecordingFailed(string error)
@@ -298,7 +323,12 @@ namespace ClipCatch
             CloseRecordingWindows();
             BackToIdle();
             RefreshRecordings();
-            ShowError("Die Aufnahme ist fehlgeschlagen.", error);
+            if (_userCancelled)
+            {
+                _userCancelled = false;
+                return;
+            }
+            ShowError("Die Aufnahme ist fehlgeschlagen. ClipCatch hat alle Aufnahmewege ausprobiert:", error);
         }
 
         private void CloseRecordingWindows()
@@ -337,9 +367,8 @@ namespace ClipCatch
 
         private void ShowError(string message, string detail)
         {
-            var log = Path.Combine(AppSettings.LogDir, "recorder.log");
             MessageBox.Show(this,
-                $"{message}\n\n{detail}\n\nDetails stehen im Protokoll:\n{log}",
+                $"{message}\n\n{detail}\n\nDetails stehen im Protokoll:\n{Log.FilePath}\n{Path.Combine(AppSettings.LogDir, "recorder.log")}",
                 "ClipCatch", MessageBoxButton.OK, MessageBoxImage.Error);
         }
 

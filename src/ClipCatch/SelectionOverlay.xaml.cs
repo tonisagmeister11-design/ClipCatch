@@ -65,7 +65,7 @@ namespace ClipCatch
 
         private const double HandleSize = 9;
         private const double Grip = 8;
-        private const double MinSize = 16;
+        private const double MinSize = 32;
 
         public MonitorInfo Monitor { get; }
         public event Action<SelectionResult> Confirmed;

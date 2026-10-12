@@ -1,5 +1,4 @@
 using System;
-using System.IO;
 using System.Threading;
 using System.Windows;
 
@@ -46,19 +45,7 @@ namespace ClipCatch
             listener.Start();
         }
 
-        public static void Log(Exception ex)
-        {
-            try
-            {
-                Directory.CreateDirectory(AppSettings.LogDir);
-                File.AppendAllText(Path.Combine(AppSettings.LogDir, "clipcatch.log"),
-                    $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {ex}{Environment.NewLine}");
-            }
-            catch
-            {
-                // Logging must never throw.
-            }
-        }
+        public static void Log(Exception ex) => ClipCatch.Log.Error("Unbehandelter Fehler", ex);
 
         protected override void OnExit(ExitEventArgs e)
         {
