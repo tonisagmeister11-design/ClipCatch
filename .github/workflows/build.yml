@@ -114,5 +114,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create $env:GITHUB_REF_NAME (Get-Item dist/ClipCatch-Setup-*.exe).FullName (Get-Item dist/ClipCatch-*-portable.zip).FullName `
-            --repo $env:GITHUB_REPOSITORY --title "ClipCatch $env:GITHUB_REF_NAME" --generate-notes
+          $files = (Get-Item dist/ClipCatch-Setup-*.exe).FullName, (Get-Item dist/ClipCatch-*-portable.zip).FullName
+          # A release created on github.com (which also creates the tag) just gets the files attached.
+          gh release view $env:GITHUB_REF_NAME --repo $env:GITHUB_REPOSITORY *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $env:GITHUB_REF_NAME @files --repo $env:GITHUB_REPOSITORY --clobber
+          } else {
+            gh release create $env:GITHUB_REF_NAME @files --repo $env:GITHUB_REPOSITORY --title "ClipCatch $env:GITHUB_REF_NAME" --generate-notes
+          }
+          if ($LASTEXITCODE -ne 0) { throw "Publishing the release failed" }
