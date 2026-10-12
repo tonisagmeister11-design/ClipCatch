@@ -1,0 +1,118 @@
+name: Build
+
+# Builds ClipCatch for Windows x64 and packages it twice:
+#   ClipCatch-Setup-<version>.exe   per-user installer, no administrator rights needed
+#   ClipCatch-<version>-portable.zip  unzip and run
+# Every run uploads both as artifacts; a pushed tag v* also publishes them as a GitHub release.
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Version
+        id: version
+        shell: pwsh
+        run: |
+          [xml]$proj = Get-Content src/ClipCatch/ClipCatch.csproj
+          $v = $proj.Project.PropertyGroup.Version | Where-Object { $_ } | Select-Object -First 1
+          if ($env:GITHUB_REF -like 'refs/tags/v*') { $v = $env:GITHUB_REF_NAME.TrimStart('v') }
+          "version=$v" >> $env:GITHUB_OUTPUT
+          Write-Output "ClipCatch $v"
+
+      - name: Build
+        shell: pwsh
+        run: dotnet build src/ClipCatch/ClipCatch.csproj -c Release -p:Platform=x64 -p:Version=${{ steps.version.outputs.version }} -warnaserror
+
+      - name: Stage app folder
+        shell: pwsh
+        run: |
+          $bin = 'src/ClipCatch/bin/x64/Release'
+          $app = 'dist/app'
+          New-Item -ItemType Directory -Force $app | Out-Null
+          Copy-Item "$bin/ClipCatch.exe", "$bin/ClipCatch.exe.config", "$bin/ScreenRecorderLib.dll" $app
+
+          # ScreenRecorderLib needs the Visual C++ runtime. Ship it next to the exe (app-local,
+          # allowed by the Visual Studio redistribution terms), so nothing needs admin rights.
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -property installationPath
+          $crt = Get-ChildItem "$vs\VC\Redist\MSVC\*\x64\Microsoft.VC14*.CRT" -Directory |
+                 Sort-Object FullName -Descending | Select-Object -First 1
+          if (-not $crt) { throw "Visual C++ runtime not found under $vs" }
+          Write-Output "VC runtime: $($crt.FullName)"
+          foreach ($dll in 'msvcp140.dll', 'vcruntime140.dll', 'vcruntime140_1.dll') {
+            Copy-Item (Join-Path $crt.FullName $dll) $app
+          }
+
+          Copy-Item LICENSE, THIRD-PARTY-NOTICES.txt $app
+          Get-ChildItem $app | Format-Table Name, Length
+
+      - name: Smoke test
+        shell: pwsh
+        run: |
+          # The exe must load: start it, give it a few seconds, then close it.
+          $p = Start-Process dist/app/ClipCatch.exe -PassThru
+          Start-Sleep -Seconds 8
+          if ($p.HasExited) { throw "ClipCatch exited right after start (code $($p.ExitCode))" }
+          Stop-Process -Id $p.Id -Force
+          Write-Output "ClipCatch started and kept running."
+
+      - name: Installer
+        shell: pwsh
+        run: |
+          $iscc = Get-Command iscc -ErrorAction SilentlyContinue
+          if (-not $iscc) {
+            $candidate = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+            if (-not (Test-Path $candidate)) { choco install innosetup -y --no-progress | Out-Null }
+            $iscc = Get-Item $candidate
+          }
+          & $iscc.Source /Qp "/DAppVersion=${{ steps.version.outputs.version }}" installer/ClipCatch.iss
+          if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed" }
+
+      - name: Portable zip
+        shell: pwsh
+        run: |
+          $v = '${{ steps.version.outputs.version }}'
+          Compress-Archive -Path dist/app/* -DestinationPath "dist/ClipCatch-$v-portable.zip"
+          Get-ChildItem dist -File | Format-Table Name, Length
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ClipCatch-Setup-${{ steps.version.outputs.version }}
+          path: dist/ClipCatch-Setup-*.exe
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ClipCatch-${{ steps.version.outputs.version }}-portable
+          path: dist/app/*
+          if-no-files-found: error
+
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create $env:GITHUB_REF_NAME (Get-Item dist/ClipCatch-Setup-*.exe).FullName (Get-Item dist/ClipCatch-*-portable.zip).FullName `
+            --repo $env:GITHUB_REPOSITORY --title "ClipCatch $env:GITHUB_REF_NAME" --generate-notes
